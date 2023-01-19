@@ -67,9 +67,9 @@ class System:
         next_r -- next controller reference (default: current reference)
         """
         self.update_plant()
+        self.predict_observer()
         self.correct_observer()
         self.update_controller(next_r)
-        self.predict_observer()
 
     def update_plant(self):
         """Advance the model by one timestep."""

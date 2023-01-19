@@ -59,14 +59,13 @@ class DoubleJointedArm(fct.System):
     the following steps:
         1. update the plant --  update the true system's position and the
                                 encoder readings using dynamics_real().
-        2. correct the observer --  Use the encoder readings to update the
+        2. predict the new state -- Use the nonlinear model to predict what this
+                                    next state will be.
+        3. correct the observer --  Use the encoder readings to update the
                                     observer state estimate, based on its
                                     trust values for the encoders.
-        3. update the controller -- Relinearize the system model and determine
+        4. update the controller -- Relinearize the system model and determine
                                     the next voltages to apply.
-        4. predict the next state using the observer -- Use the nonlinear
-                                    model to predict what the next state will
-                                    be.
     
     These functions were implemented in the System superclass, but several had
     to be overridden to implement nonlinear control. This class also does not
