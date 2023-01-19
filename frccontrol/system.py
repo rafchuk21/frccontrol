@@ -158,8 +158,8 @@ class System:
         states -- state vector around which to linearize model
         inputs -- input vector around which to linearize model
         """
-        sysc = self.create_model(states, inputs)
-        self.sysd = sysc.to_discrete(self.dt)
+        self.sysc = self.create_model(states, inputs)
+        self.sysd = self.sysc.to_discrete(self.dt)
         return self.sysd
 
     @abstractmethod
