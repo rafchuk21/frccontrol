@@ -7,8 +7,9 @@ from abc import abstractmethod, ABCMeta
 import matplotlib.pyplot as plt
 import numpy as np
 import scipy as sp
+from scipy.signal import StateSpace
 
-from frccontrol import kalmd, lqr, runge_kutta
+from frccontrol import kalmd, lqr, runge_kutta, numerical_jacobian_x, numerical_jacobian_u
 
 
 class System:
@@ -84,7 +85,7 @@ class System:
         In one update step, this should be run after correct_observer().
         """
         if self.f:
-            self.x_hat = runge_kutta(self.f, self.x, self.u, self.dt)
+            self.x_hat = runge_kutta(self.f, self.x_hat, self.u, self.dt)
             self.P = self.sysd.A @ self.P @ self.sysd.A.T + self.Q
         else:
             self.x_hat = self.sysd.A @ self.x_hat + self.sysd.B @ self.u
@@ -139,7 +140,27 @@ class System:
         Returns:
         StateSpace instance containing continuous state-space model
         """
+        if self.f:
+            nstates = states.shape[0]
+            ninputs = inputs.shape[0]
+            A = numerical_jacobian_x(nstates, nstates, self.f, states, inputs)
+            B = numerical_jacobian_u(nstates, ninputs, self.f, states, inputs)
+            C = np.eye(nstates)
+            D = np.zeros((nstates, ninputs))
+
+            return StateSpace(A, B, C, D)
         return
+    
+    def relinearize(self, states, inputs):
+        """Relinearize the model around the given states and inputs
+        
+        Keyword arguments:
+        states -- state vector around which to linearize model
+        inputs -- input vector around which to linearize model
+        """
+        sysc = self.create_model(states, inputs)
+        self.sysd = sysc.to_discrete(self.dt)
+        return self.sysd
 
     @abstractmethod
     def design_controller_observer(self):
@@ -290,7 +311,7 @@ class System:
 
             # Log states for plotting
             x_rec = np.concatenate((x_rec, self.x_hat), axis=1)
-            ref_rec = np.concatenate((ref_rec, self.r), axis=1)
+            ref_rec = np.concatenate((ref_rec, np.array([self.r]).T), axis=1)
             u_rec = np.concatenate((u_rec, self.u), axis=1)
             y_rec = np.concatenate((y_rec, self.y), axis=1)
 
