@@ -3,14 +3,17 @@ import numpy as np
 
 class Trajectory(object):
 
-    def __init__(self, times: np.matrix, states: np.matrix) -> Trajectory:
+    def __init__(self, times, states) -> Trajectory:
         """Initialize a Trajectory.
         
         Arguments:
-            times: Column vector of trajectory timestamps.
-            states: Matrix of corresponding states, where each state is a column
+            times: 1D array of trajectory timestamps.
+            states: 2D array of corresponding states, where each state is a column
         """
-        self.times = times
+        self.times = times.flatten()
+        if states.shape[1] != len(times):
+            raise Exception('must have same number of times and states; %d != %d'\
+                % (len(times), states.shape[1]))
         self.states = states
         self.start_time = times[0]
         self.end_time = times[-1]
@@ -18,8 +21,54 @@ class Trajectory(object):
     def clip_time(self, time):
         """Limit Trajectory timestamp between start_time and end_time."""
         return np.clip(time, self.start_time, self.end_time)
+    
+    def insert(self, time, state):
+        if state.ndim == 1:
+            state = np.array([state]).T
 
-    def sample(self, time):
+        if state.shape[0] != self.states.shape[0]:
+            raise Exception('state must have the same number of rows; %d != %d'\
+                % (state.shape[0], self.states.shape[0]))
+
+        if state.shape[1] != 1:
+            raise Exception('state must have exactly one column, had %d'\
+                % (state.shape[1]))
+
+        before_idx_list = np.where(self.times <= time)[0]
+        after_idx_list = np.where(self.times >= time)[0]
+
+        # if there are no elements before the new time
+        if before_idx_list.size == 0:
+            # add to start of Trajectory
+            self.times = np.insert(self.times, 0, time)
+            self.states = np.insert(self.states, 0, state.T, axis=1)
+            self.start_time = time
+            return self
+        # if there are no elements after the new time
+        elif after_idx_list.size == 0:
+            # add to end of Trajectory
+            self.times = np.append(self.times, time)
+            self.states = np.append(self.states, state, axis=1)
+            self.end_time = time
+            return self
+        
+        prev_idx = before_idx_list[-1]
+        next_idx = after_idx_list[0]
+
+        if self.times[prev_idx] == time:
+            # time already in Trajectory; overwrite
+            self.states[:, prev_idx] = state.flat
+        elif self.times[next_idx] == time:
+            # time already in Trajectory; overwrite
+            self.states[:, next_idx] = state.flat
+        else:
+            # add to middle of Trajectory
+            self.times = np.insert(self.times, next_idx, time)
+            self.states = np.insert(self.states, next_idx, state.T, axis=1)
+        
+        return self
+
+    def sample(self, time, up_to = False):
         """ Sample the trajectory for the given time.
             Linearly interpolates between trajectory samples.
             If time is outside of trajectory, gives the start/end state.
@@ -39,7 +88,12 @@ class Trajectory(object):
         prev_time = self.times[prev_idx]
         next_time = self.times[next_idx]
 
-        return (next_val - prev_val)/(next_time - prev_time)*(time-prev_time) + prev_val
+        interpolated_val = (next_val - prev_val)/(next_time - prev_time)*(time-prev_time) + prev_val
+
+        if up_to:
+            return np.concatenate((self.states[:, :prev_idx], interpolated_val), axis=1)
+        else:
+            return interpolated_val
     
     def append(self, other: Trajectory) -> Trajectory:
         """ Append another trajectory to this trajectory.
@@ -64,7 +118,7 @@ class Trajectory(object):
     
     
     def to_table(self) -> np.ndarray:
-        return np.concatenate((self.times, self.states.T), 1)
+        return np.concatenate((np.array([self.times]).T, self.states.T), 1)
 
 def from_coeffs(coeffs: np.matrix, t0, tf, n = 100) -> Trajectory:
         """ Generate a trajectory from a polynomial coefficients matrix.

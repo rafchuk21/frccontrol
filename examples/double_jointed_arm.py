@@ -9,8 +9,11 @@ import matplotlib.pyplot as plt
 import numpy as np
 from scipy.signal import StateSpace
 import matplotlib.animation as animation
+import keyboard
 
 import frccontrol as fct
+
+np.set_printoptions(linewidth=400, threshold=sys.maxsize)
 
 if "--noninteractive" in sys.argv:
     mpl.use("svg")
@@ -78,7 +81,7 @@ class DoubleJointedArm(fct.System):
         """Double-jointed arm subsystem.
 
         Keyword arguments:
-        dt -- time between model/controller updates
+        dt -- simulation step time
         start_state -- initial state of the system
         """
         # Prepare plot labels
@@ -91,6 +94,13 @@ class DoubleJointedArm(fct.System):
         # Store the arm constants
         self.constants = DoubleJointedArmConstants()
 
+        self.t = 0.0
+
+        self.loop_time = 0.020
+        self.last_commanded = -self.loop_time
+
+        
+
         # Initialize the superclass System
         fct.System.__init__(
             self,
@@ -101,12 +111,52 @@ class DoubleJointedArm(fct.System):
             np.zeros((2, 1)),
             self.dynamics       # this is the nonlinear model
         )
-    
+
+        self.u_k = np.zeros((2,1))
+        self.u_ff = np.zeros((2,1))
+
+        # sim: angle 1, angle 2, omega 1, omega 2, input error 1, input error 2,
+        # true: angle 1, angle 2, omega 1, omega 2, __, __
+        # target: angle 1, angle 2, omega 1, omega 2, __, __
+        # encoder reading 1, encoder reading 2,
+        # voltage 1, voltage 2, 
+        log_init = np.concatenate(( self.x_hat, self.x, self.r, self.y, self.u, self.u_k, self.u_ff, self.r - self.x_hat ))
+
+        self.log = fct.Trajectory(np.array([self.t]), log_init)
+        self.XHAT_IDX = [0,1,2,3]
+        self.U_ERR_IDX = [4,5]
+        self.X_IDX = [6,7,8,9] # 10, 11
+        self.REF_IDX = [12, 13, 14, 15] # 16, 17
+        self.ENC_IDX = [18, 19]
+        self.VOLT_IDX = [20, 21]
+        self.UK_IDX = [22, 23]
+        self.UFF_IDX = [24, 25]
+        self.X_ERR_IDX = [26, 27]
+    __default = object()
     """
     -------------------
     MAIN LOOP OVERRIDES
     -------------------
     """
+
+    def update(self, next_r=__default):
+        """Advance the model by one timestep.
+
+        Keyword arguments:
+        next_r -- next controller reference (default: current reference)
+        """
+        self.t += self.dt
+
+        self.update_plant()
+
+        if self.t - self.last_commanded >= self.loop_time - 1e-6:
+            self.predict_observer()
+            self.correct_observer()
+            self.update_controller(next_r)
+            self.last_commanded = self.t
+
+        log_entry = np.concatenate(( self.x_hat, self.x, self.r, self.y, self.u, self.u_k, self.u_ff, self.r - self.x_hat ))
+        self.log.insert(self.t, log_entry)
 
     def update_plant(self):
         """Advance the model by one timestep.
@@ -119,7 +169,26 @@ class DoubleJointedArm(fct.System):
         self.y = self.sysd.C @ self.x + self.sysd.D @ self.u + \
             np.array([np.random.normal(0, .01, 2)]).T
 
-    # correct_observer() step inherited without changes
+    def predict_observer(self):
+        """Runs the predict step of the observer update."""
+
+        self.x_hat = fct.runge_kutta(self.f, self.x_hat, self.u, self.t - self.last_commanded)
+        self.P = self.sysd.A @ self.P @ self.sysd.A.T + self.Q
+
+    def correct_observer(self):
+        """Runs the correct step of the observer update."""
+        
+        self.kalman_gain = (
+            self.P
+            @ self.sysd.C.T
+            @ np.linalg.inv(self.sysd.C @ self.P @ self.sysd.C.T + self.R)
+        )
+        self.P = (
+            np.eye(self.sysd.A.shape[0]) - self.kalman_gain @ self.sysd.C
+        ) @ self.P
+        self.x_hat += self.kalman_gain @ (
+            self.y - self.sysd.C @ self.x_hat - self.sysd.D @ self.u
+        )
 
     def update_controller(self, next_r = None):
         """Update the controller given a new reference.
@@ -133,17 +202,17 @@ class DoubleJointedArm(fct.System):
         self.design_controller_observer()
 
         # Voltage output proportional to error:
-        u = self.K @ np.array([(self.r[0:4] - self.x_hat[0:4,0])]).T
+        u = self.K @ (self.r[0:4] - self.x_hat[0:4])
         # Voltage output from feedforward:
-        uff = self.feed_forward(np.array([next_r]).T)
+        uff = self.feed_forward(next_r)
         # Voltage output from input error estimation. Note that the estimate
         # is in Newton-meters, so has to be converted to volts:
         uerr = np.linalg.inv(self.constants.K3) @ self.x_hat[4:]
 
         self.r = next_r
         self.u = np.clip(u + uff - uerr, self.u_min, self.u_max)
-
-    # predict_observer() step inherited with no changes.
+        self.u_k = u
+        self.u_ff = uff
 
     """
     ---------------
@@ -157,18 +226,28 @@ class DoubleJointedArm(fct.System):
         """
         self.relinearize(self.x_hat, self.feed_forward(self.x_hat))
 
-        q_pos = 0.01745
-        q_vel = 0.08726
+        q_pos = 0.01745*10
+        q_vel = 0.08726*10
         
         self.design_lqr([q_pos, q_pos, q_vel, q_vel], [12.0, 12.0])
+        #self.K = np.array([[10, 0, 0, 0], [0, 10, 0, 0]])
 
-        q_pos = 0.01745
-        q_vel = 0.1745329
+        q_pos = 0.01745*10
+        q_vel = 0.1745329*10
         est = 10
         r_pos = 0.05
         self.design_kalman_filter([q_pos, q_pos, q_vel, q_vel, est, est], [r_pos, r_pos])
 
-    # relinearize() inherited without changes.
+    def relinearize(self, states, inputs):
+        """Relinearize the model around the given states and inputs
+        
+        Keyword arguments:
+        states -- state vector around which to linearize model
+        inputs -- input vector around which to linearize model
+        """
+        self.sysc = self.create_model(states, inputs)
+        self.sysd = self.sysc.to_discrete(self.t - self.last_commanded)
+        return self.sysd
 
     def create_model(self, states, inputs):
         """Relinearize model around given state.
@@ -209,7 +288,7 @@ class DoubleJointedArm(fct.System):
         Ar = self.sysc.A[:4,:4]
         Br = self.sysc.B[:4,:]
         Cr = self.sysc.C[:,:4]
-        sysd_reduced = StateSpace(Ar, Br, Cr, self.sysc.D).to_discrete(self.dt)
+        sysd_reduced = StateSpace(Ar, Br, Cr, self.sysc.D).to_discrete(self.sysd.dt)
         self.K = fct.lqr(sysd_reduced, Q, R)
     
     """
@@ -227,7 +306,6 @@ class DoubleJointedArm(fct.System):
         Keyword arguments:
         states -- current system state
         """
-        
         [theta1, theta2, omega1, omega2] = states[:4].flat
         c2 = np.cos(theta2)
 
@@ -384,7 +462,7 @@ class DoubleJointedArmConstants(object):
 def main():
     """Entry point."""
 
-    dt = 0.005
+    dt = 0.001
 
     constants = DoubleJointedArmConstants()
 
@@ -409,7 +487,7 @@ def main():
     # Generate references for simulation
     refs = []
     for i, _ in enumerate(tvec):
-        r = np.append(traj.sample(tvec[i])[:4], np.zeros(2))
+        r = np.concatenate((traj.sample(tvec[i])[:4], np.zeros((2,1))))
         #print(r)
         refs.append(r)
 
@@ -419,13 +497,13 @@ def main():
     if "--noninteractive" in sys.argv:
         plt.savefig("double_jointed_arm_response.svg")
     else:
-        animate_arm(double_jointed_arm, tvec[indices], x_rec[:, indices], ref_rec[:, indices])
+        animate_arm(double_jointed_arm)
         #plt.show()
 
 def get_col(m, i):
     return np.array([m[:,i]]).T
 
-def animate_arm(arm, t, states, target_states):
+def animate_arm(arm: DoubleJointedArm, tspan = None, fps = 20):
     def get_arm_joints(state):
         """Get the xy positions of all three robot joints (?) - base joint (at 0,0), elbow, end effector"""
         (joint_pos, eff_pos) = arm.constants.fwd_kinematics(state)
@@ -433,38 +511,102 @@ def animate_arm(arm, t, states, target_states):
         y = np.array([0, joint_pos[1,0], eff_pos[1,0]])
         return (x,y)
 
-    dt = t[4] - t[3]
-    print(dt)
+    def plot_data(t, hist, indices, ax: plt.Axes = None, lines = None):
+        if ax is None and lines is None:
+            raise Exception("Either ax or lines must be given.")
+        data = hist[indices, :]
+        if lines is None:
+            for idx in indices:
+                ax.plot(t, hist[idx,:])
+            lines = ax.get_lines()
+        else:
+            for i, idx in enumerate(indices):
+                lines[i].set_data(t, hist[idx,:])
+        return lines
+    
+    if tspan is None:
+        tspan = (arm.log.start_time, arm.log.end_time)
+
+    dt = 1.0/fps
+
+    (t0, tf) = tspan
+    tvec = np.arange(t0, tf + dt, dt)
 
     fig = plt.figure()
-    ax = fig.add_subplot(1,1,1)
+    ax = fig.add_subplot(4,4,(1,15))
     ax.axis('square')
     ax.grid(True)
     total_len = arm.constants.l1 + arm.constants.l2
     ax.set_xlim(-total_len, total_len)
     ax.set_ylim(-total_len, total_len)
-    (xs, ys) = get_arm_joints(get_col(states, 0))
-    target_line, arm_line = ax.plot(xs, ys, 'b--o', xs, ys, 'r-o')
-    ax.legend([arm_line, target_line], ["Current State", "Target State"], loc='lower left')
+    initial_state = arm.log.sample(t0)
+    (xs, ys) = get_arm_joints(initial_state[arm.X_IDX])
+    target_line, arm_line, est_line = ax.plot(xs, ys, 'b--o', xs, ys, 'r-o', xs, ys, 'g--o')
+    ax.legend([arm_line, target_line, est_line], ["Current State", "Target State", "Estimated State"], loc='lower left')
+
+    ax2 = fig.add_subplot(4,4, 4)
+    ax3 = fig.add_subplot(4,4, 12)
+
+    ax2.grid(True)
+    ax3.grid(True)
+
+    ax2.set_xlim(tspan)
+    ax3.set_xlim(tspan)
+
+    ax2_indices = arm.UK_IDX + arm.UFF_IDX
+    ax3_indices = arm.X_ERR_IDX
+
+    all_hist = arm.log.states
+    ax2_ylim = (np.min(all_hist[ax2_indices, :]), np.max(all_hist[ax2_indices, :]))
+    ax3_ylim = (np.min(all_hist[ax3_indices, 1:]), np.max(all_hist[ax3_indices, 1:]))
+
+    ax2.set_ylim(ax2_ylim)
+    ax3.set_ylim(ax3_ylim)
+
+    ax2_lines = plot_data(np.array([t0]), initial_state, ax2_indices, ax = ax2)
+    ax3_lines = plot_data(np.array([t0]), initial_state, ax3_indices, ax = ax3)
+
+    ax2.legend(ax2_lines, ["J1 K", "J2 K", "J1 FF", "J2 FF"], loc='lower center', bbox_to_anchor = (0.5, -1))
+    ax3.legend(ax3_lines, ["J1 Est. Err.", "J2 Est. Err."], loc='lower center', bbox_to_anchor = (0.5, -1))
 
     def init():
-        (xs, ys) = get_arm_joints(get_col(states, 0))
+        (xs, ys) = get_arm_joints(initial_state[arm.X_IDX])
         target_line.set_data(xs, ys)
         arm_line.set_data(xs, ys)
+        est_line.set_data(xs, ys)
         ax.set_xlim(-total_len, total_len)
         ax.set_ylim(-total_len, total_len)
-        return target_line, arm_line
+
+        plot_data(np.array([t0]), initial_state, ax2_indices, lines = ax2_lines)
+        plot_data(np.array([t0]), initial_state, ax3_indices, lines = ax3_lines)
+        ax2.set_ylim(ax2_ylim)
+        ax3.set_ylim(ax3_ylim)
+        return [target_line, arm_line, est_line] + ax2_lines + ax3_lines
 
     def animate(i):
-        (xs, ys) = get_arm_joints(get_col(target_states, i))
+        t = t0 + i*dt
+        state_hist = arm.log.sample(t, up_to = True)
+        time_hist = arm.log.times[:len(state_hist.T)]
+        state = arm.log.sample(t)
+        
+        (xs, ys) = get_arm_joints(state[arm.REF_IDX])
         target_line.set_data(xs, ys)
-        (xs, ys) = get_arm_joints(get_col(states, i))
+        (xs, ys) = get_arm_joints(state[arm.X_IDX])
         arm_line.set_data(xs, ys)
+        (xs, ys) = get_arm_joints(state[arm.XHAT_IDX])
+        est_line.set_data(xs, ys)
         ax.set_xlim(-total_len, total_len)
         ax.set_ylim(-total_len, total_len)
-        return target_line, arm_line
+
+        plot_data(time_hist, state_hist, ax2_indices, lines = ax2_lines)
+        plot_data(time_hist, state_hist, ax3_indices, lines = ax3_lines)
+        ax2.set_ylim(ax2_ylim)
+        ax3.set_ylim(ax3_ylim)
+
+        #keyboard.wait("r")
+        return [target_line, arm_line, est_line] + ax2_lines + ax3_lines
     
-    nframes = len(t)
+    nframes = len(tvec)
     anim = animation.FuncAnimation(fig, animate, init_func = init, frames = nframes, interval = int(dt*1000), blit=False, repeat=True)
     plt.show()
     #anim.save('frccontrol_sim.gif', writer='imagemagick')

@@ -311,7 +311,7 @@ class System:
 
             # Log states for plotting
             x_rec = np.concatenate((x_rec, self.x_hat), axis=1)
-            ref_rec = np.concatenate((ref_rec, np.array([self.r]).T), axis=1)
+            ref_rec = np.concatenate((ref_rec, self.r), axis=1)
             u_rec = np.concatenate((u_rec, self.u), axis=1)
             y_rec = np.concatenate((y_rec, self.y), axis=1)
 
