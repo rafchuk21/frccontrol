@@ -96,7 +96,7 @@ class DoubleJointedArm(fct.System):
 
         self.t = 0.0
 
-        self.loop_time = 0.02
+        self.loop_time = 0.020
         self.last_commanded = -self.loop_time
 
         
@@ -616,7 +616,7 @@ def animate_arm(arm: DoubleJointedArm, tspan = None, fps = 20):
     nframes = len(tvec)
     anim = animation.FuncAnimation(fig, animate, init_func = init, frames = nframes, interval = int(dt*1000), blit=False, repeat=True)
     plt.show()
-    #anim.save('frccontrol_sim.gif', writer='imagemagick')
+    #anim.save('frccontrol_sim_distubance.gif', writer='imagemagick')
 
 if __name__ == "__main__":
     main()

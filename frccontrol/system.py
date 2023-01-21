@@ -353,6 +353,7 @@ class System:
             plt.plot(t, self.extract_row(x_rec, i), label="True state")
             plt.plot(t, self.extract_row(ref_rec, i), label="Reference")
             plt.legend()
+            plt.grid(True)
 
         for i in range(ninputs):
             plt.subplot(subplot_max, 1, nstates + i + 1)
