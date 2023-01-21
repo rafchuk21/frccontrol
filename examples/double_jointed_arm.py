@@ -156,8 +156,6 @@ class DoubleJointedArm(fct.System):
             self.update_controller(next_r)
             self.last_commanded = self.t
 
-        if abs(self.x_hat[2]) > 1 and abs(last_vel) <= 1:
-            print(self.x_hat.T)
         log_entry = np.concatenate(( self.x_hat, self.x, self.r, self.y, self.u, self.u_k, self.u_ff, self.r - self.x_hat, np.array([[np.linalg.cond(self.sysd.A)]]) ))
         self.log.insert(self.t, log_entry)
 
@@ -167,7 +165,7 @@ class DoubleJointedArm(fct.System):
         Updates the true state (which the controller can't see) and the
         observed state (which the controller can see).
         """
-        self.x = fct.runge_kutta(self.dynamics_real, self.x, self.u, self.dt)
+        self.x = fct.rkdp(self.dynamics_real, self.x, self.u, self.dt)
         # Observed state: has some added noise
         self.y = self.sysd.C @ self.x + self.sysd.D @ self.u + \
             np.array([np.random.normal(0, .01, 2)]).T
@@ -175,7 +173,7 @@ class DoubleJointedArm(fct.System):
     def predict_observer(self):
         """Runs the predict step of the observer update."""
 
-        self.x_hat = fct.runge_kutta(self.f, self.x_hat, self.u, self.t - self.last_commanded)
+        self.x_hat = fct.rkdp(self.f, self.x_hat, self.u, self.t - self.last_commanded)
         self.P = self.sysd.A @ self.P @ self.sysd.A.T + self.Q
 
     def correct_observer(self):
@@ -385,11 +383,14 @@ class DoubleJointedArm(fct.System):
         disturbance_torque = np.zeros((2,1))
 
         # Some example disturbances:
-        #disturbance_torque = disturbance_torque + np.array([[150, -90]]).T
+        disturbance_torque = disturbance_torque + np.array([[150, -90]]).T
         #basic_torque = basic_torque * .5
         #G = G * 2
 
         torque = basic_torque - back_emf_loss + disturbance_torque
+        #print(states.T)
+        #print("Dynamics Determinants: M: %0.02f, C: %0.02f, C-Kb: %0.02f" % (np.linalg.det(M), np.linalg.det(C), np.linalg.det(C - self.constants.K4)))
+        #print("Dynamics Conditions: M: %0.02f, C: %0.02f, C-Kb: %0.02f" % (np.linalg.cond(M), np.linalg.cond(C), np.linalg.cond(C - self.constants.K4)))
         alpha_vec = np.linalg.inv(M) @ (torque - C @ omega_vec - G)
         state_dot = np.concatenate((omega_vec, alpha_vec))
         if states.shape[0] == 6:
@@ -465,7 +466,7 @@ class DoubleJointedArmConstants(object):
 def main():
     """Entry point."""
 
-    dt = 0.001
+    dt = 0.020
 
     constants = DoubleJointedArmConstants()
 
@@ -497,8 +498,10 @@ def main():
     xhat_rec, x_rec, ref_rec, u_rec, _ = double_jointed_arm.generate_time_responses(refs)
     double_jointed_arm.plot_time_responses(tvec, xhat_rec, x_rec, ref_rec, u_rec)
     indices = np.arange(0, len(tvec), 10)
-
-    print(double_jointed_arm.log.sample(1.4)[double_jointed_arm.XHAT_IDX].T)
+    print(double_jointed_arm.log.times[95:105])
+    print(double_jointed_arm.log.sample(2)[double_jointed_arm.X_IDX].T)
+    print(double_jointed_arm.log.sample(2)[double_jointed_arm.REF_IDX].T)
+    print(double_jointed_arm.log.sample(2.02)[double_jointed_arm.X_IDX].T)
     if "--noninteractive" in sys.argv:
         plt.savefig("double_jointed_arm_response.svg")
     else:
