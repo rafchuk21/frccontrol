@@ -96,7 +96,7 @@ class DoubleJointedArm(fct.System):
 
         self.t = 0.0
 
-        self.loop_time = 0.020
+        self.loop_time = 0.02
         self.last_commanded = -self.loop_time
 
         
@@ -120,7 +120,7 @@ class DoubleJointedArm(fct.System):
         # target: angle 1, angle 2, omega 1, omega 2, __, __
         # encoder reading 1, encoder reading 2,
         # voltage 1, voltage 2, 
-        log_init = np.concatenate(( self.x_hat, self.x, self.r, self.y, self.u, self.u_k, self.u_ff, self.r - self.x_hat ))
+        log_init = np.concatenate(( self.x_hat, self.x, self.r, self.y, self.u, self.u_k, self.u_ff, self.r - self.x_hat, np.array([[np.linalg.cond(self.sysd.A)]]) ))
 
         self.log = fct.Trajectory(np.array([self.t]), log_init)
         self.XHAT_IDX = [0,1,2,3]
@@ -131,7 +131,8 @@ class DoubleJointedArm(fct.System):
         self.VOLT_IDX = [20, 21]
         self.UK_IDX = [22, 23]
         self.UFF_IDX = [24, 25]
-        self.X_ERR_IDX = [26, 27]
+        self.X_ERR_IDX = [26, 27] # 28, 29, 30, 31
+        self.ACOND_IDX = [32]
     __default = object()
     """
     -------------------
@@ -146,7 +147,7 @@ class DoubleJointedArm(fct.System):
         next_r -- next controller reference (default: current reference)
         """
         self.t += self.dt
-
+        last_vel = self.x_hat[2]
         self.update_plant()
 
         if self.t - self.last_commanded >= self.loop_time - 1e-6:
@@ -155,7 +156,9 @@ class DoubleJointedArm(fct.System):
             self.update_controller(next_r)
             self.last_commanded = self.t
 
-        log_entry = np.concatenate(( self.x_hat, self.x, self.r, self.y, self.u, self.u_k, self.u_ff, self.r - self.x_hat ))
+        if abs(self.x_hat[2]) > 1 and abs(last_vel) <= 1:
+            print(self.x_hat.T)
+        log_entry = np.concatenate(( self.x_hat, self.x, self.r, self.y, self.u, self.u_k, self.u_ff, self.r - self.x_hat, np.array([[np.linalg.cond(self.sysd.A)]]) ))
         self.log.insert(self.t, log_entry)
 
     def update_plant(self):
@@ -183,9 +186,9 @@ class DoubleJointedArm(fct.System):
             @ self.sysd.C.T
             @ np.linalg.inv(self.sysd.C @ self.P @ self.sysd.C.T + self.R)
         )
-        self.P = (
-            np.eye(self.sysd.A.shape[0]) - self.kalman_gain @ self.sysd.C
-        ) @ self.P
+        IKC = np.eye(self.sysd.A.shape[0]) - self.kalman_gain @ self.sysd.C
+        KRK = self.kalman_gain @ self.R @ self.kalman_gain.T
+        self.P = IKC @ self.P @ IKC.T + KRK
         self.x_hat += self.kalman_gain @ (
             self.y - self.sysd.C @ self.x_hat - self.sysd.D @ self.u
         )
@@ -232,8 +235,8 @@ class DoubleJointedArm(fct.System):
         self.design_lqr([q_pos, q_pos, q_vel, q_vel], [12.0, 12.0])
         #self.K = np.array([[10, 0, 0, 0], [0, 10, 0, 0]])
 
-        q_pos = 0.01745*10
-        q_vel = 0.1745329*10
+        q_pos = 0.01745
+        q_vel = 0.1745329
         est = 10
         r_pos = 0.05
         self.design_kalman_filter([q_pos, q_pos, q_vel, q_vel, est, est], [r_pos, r_pos])
@@ -491,9 +494,11 @@ def main():
         #print(r)
         refs.append(r)
 
-    x_rec, ref_rec, u_rec, _ = double_jointed_arm.generate_time_responses(refs)
-    double_jointed_arm.plot_time_responses(tvec, x_rec, ref_rec, u_rec)
+    xhat_rec, x_rec, ref_rec, u_rec, _ = double_jointed_arm.generate_time_responses(refs)
+    double_jointed_arm.plot_time_responses(tvec, xhat_rec, x_rec, ref_rec, u_rec)
     indices = np.arange(0, len(tvec), 10)
+
+    print(double_jointed_arm.log.sample(1.4)[double_jointed_arm.XHAT_IDX].T)
     if "--noninteractive" in sys.argv:
         plt.savefig("double_jointed_arm_response.svg")
     else:
@@ -554,7 +559,8 @@ def animate_arm(arm: DoubleJointedArm, tspan = None, fps = 20):
     ax3.set_xlim(tspan)
 
     ax2_indices = arm.UK_IDX + arm.UFF_IDX
-    ax3_indices = arm.X_ERR_IDX
+    #ax3_indices = arm.X_ERR_IDX
+    ax3_indices = arm.ACOND_IDX
 
     all_hist = arm.log.states
     ax2_ylim = (np.min(all_hist[ax2_indices, :]), np.max(all_hist[ax2_indices, :]))
@@ -567,7 +573,8 @@ def animate_arm(arm: DoubleJointedArm, tspan = None, fps = 20):
     ax3_lines = plot_data(np.array([t0]), initial_state, ax3_indices, ax = ax3)
 
     ax2.legend(ax2_lines, ["J1 K", "J2 K", "J1 FF", "J2 FF"], loc='lower center', bbox_to_anchor = (0.5, -1))
-    ax3.legend(ax3_lines, ["J1 Est. Err.", "J2 Est. Err."], loc='lower center', bbox_to_anchor = (0.5, -1))
+    #ax3.legend(ax3_lines, ["J1 Est. Err.", "J2 Est. Err."], loc='lower center', bbox_to_anchor = (0.5, -1))
+    ax3.legend(ax3_lines, ["A Condition"], loc='lower center', bbox_to_anchor = (0.5, -1))
 
     def init():
         (xs, ys) = get_arm_joints(initial_state[arm.X_IDX])

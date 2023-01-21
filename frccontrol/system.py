@@ -298,6 +298,7 @@ class System:
         Keyword arguments:
         refs -- list of reference vectors, one for each time
         """
+        xhat_rec = np.zeros((self.sysd.A.shape[0], 0))
         x_rec = np.zeros((self.sysd.A.shape[0], 0))
         ref_rec = np.zeros((self.sysd.A.shape[0], 0))
         u_rec = np.zeros((self.sysd.B.shape[1], 0))
@@ -310,14 +311,15 @@ class System:
             self.update(next_r)
 
             # Log states for plotting
-            x_rec = np.concatenate((x_rec, self.x_hat), axis=1)
+            xhat_rec = np.concatenate((xhat_rec, self.x_hat), axis=1)
+            x_rec = np.concatenate((x_rec, self.x), axis=1)
             ref_rec = np.concatenate((ref_rec, self.r), axis=1)
             u_rec = np.concatenate((u_rec, self.u), axis=1)
             y_rec = np.concatenate((y_rec, self.y), axis=1)
 
-        return x_rec, ref_rec, u_rec, y_rec
+        return xhat_rec, x_rec, ref_rec, u_rec, y_rec
 
-    def plot_time_responses(self, t, x_rec, ref_rec, u_rec, title=__default):
+    def plot_time_responses(self, t, xhat_rec, x_rec, ref_rec, u_rec, title=__default):
         """Plots time-domain responses of the system and the control inputs.
 
         Keyword arguments:
@@ -347,7 +349,8 @@ class System:
                     plt.title("Time-domain responses")
                 else:
                     plt.title(title)
-            plt.plot(t, self.extract_row(x_rec, i), label="Estimated state")
+            plt.plot(t, self.extract_row(xhat_rec, i), label="Estimated state")
+            plt.plot(t, self.extract_row(x_rec, i), label="True state")
             plt.plot(t, self.extract_row(ref_rec, i), label="Reference")
             plt.legend()
 
