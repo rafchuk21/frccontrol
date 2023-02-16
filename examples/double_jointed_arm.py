@@ -6,9 +6,11 @@ import sys
 
 import matplotlib as mpl
 import matplotlib.pyplot as plt
+from matplotlib.patches import Rectangle
 import numpy as np
 from scipy.signal import StateSpace
 import matplotlib.animation as animation
+import json
 import keyboard
 
 import frccontrol as fct
@@ -227,8 +229,8 @@ class DoubleJointedArm(fct.System):
         """
         self.relinearize(self.x_hat, self.feed_forward(self.x_hat))
 
-        q_pos = 0.01745*10
-        q_vel = 0.08726*10
+        q_pos = 0.01745
+        q_vel = 0.08726
         
         self.design_lqr([q_pos, q_pos, q_vel, q_vel], [12.0, 12.0])
         #self.K = np.array([[10, 0, 0, 0], [0, 10, 0, 0]])
@@ -383,7 +385,7 @@ class DoubleJointedArm(fct.System):
         disturbance_torque = np.zeros((2,1))
 
         # Some example disturbances:
-        disturbance_torque = disturbance_torque + np.array([[150, -90]]).T
+        #disturbance_torque = disturbance_torque + np.array([[150, -90]]).T
         #basic_torque = basic_torque * .5
         #G = G * 2
 
@@ -430,7 +432,7 @@ class DoubleJointedArmConstants(object):
         self.N2 = 2
 
         # Gravity
-        self.g = 9.81
+        self.g = 9.806
 
         self.stall_torque = 3.36
         self.free_speed = 5880.0 * 2.0*np.pi/60.0
@@ -483,9 +485,12 @@ def main():
 
     traj = traj1.append(traj2)
 
-    tvec = np.arange(0, 10 + dt, dt)
+    #traj = fct.trajectory.from_json('traj.json')
 
-    start_state = np.concatenate((state1, np.zeros((2,1))))
+    tvec = np.arange(0, traj.end_time + 1 + dt, dt)
+
+    start_state = np.concatenate((traj.sample(0), np.zeros((2,1))))
+    #start_state = traj.sample(0)
     double_jointed_arm = DoubleJointedArm(dt, start_state)
 
     # Generate references for simulation
@@ -496,15 +501,17 @@ def main():
         refs.append(r)
 
     xhat_rec, x_rec, ref_rec, u_rec, _ = double_jointed_arm.generate_time_responses(refs)
-    double_jointed_arm.plot_time_responses(tvec, xhat_rec, x_rec, ref_rec, u_rec)
+    #double_jointed_arm.plot_time_responses(tvec, xhat_rec, x_rec, ref_rec, u_rec)
+    write_to_json(tvec, xhat_rec, u_rec)
     indices = np.arange(0, len(tvec), 10)
-    print(double_jointed_arm.log.times[95:105])
-    print(double_jointed_arm.log.sample(2)[double_jointed_arm.X_IDX].T)
-    print(double_jointed_arm.log.sample(2)[double_jointed_arm.REF_IDX].T)
-    print(double_jointed_arm.log.sample(2.02)[double_jointed_arm.X_IDX].T)
+    #print(double_jointed_arm.log.times[95:105])
+    #print(double_jointed_arm.log.sample(2)[double_jointed_arm.X_IDX].T)
+    #print(double_jointed_arm.log.sample(2)[double_jointed_arm.REF_IDX].T)
+    #print(double_jointed_arm.log.sample(2.02)[double_jointed_arm.X_IDX].T)
     if "--noninteractive" in sys.argv:
         plt.savefig("double_jointed_arm_response.svg")
     else:
+        pass
         animate_arm(double_jointed_arm)
         #plt.show()
 
@@ -561,9 +568,9 @@ def animate_arm(arm: DoubleJointedArm, tspan = None, fps = 20):
     ax2.set_xlim(tspan)
     ax3.set_xlim(tspan)
 
-    ax2_indices = arm.UK_IDX + arm.UFF_IDX
+    ax2_indices = arm.VOLT_IDX
     #ax3_indices = arm.X_ERR_IDX
-    ax3_indices = arm.ACOND_IDX
+    ax3_indices = arm.U_ERR_IDX
 
     all_hist = arm.log.states
     ax2_ylim = (np.min(all_hist[ax2_indices, :]), np.max(all_hist[ax2_indices, :]))
@@ -575,9 +582,9 @@ def animate_arm(arm: DoubleJointedArm, tspan = None, fps = 20):
     ax2_lines = plot_data(np.array([t0]), initial_state, ax2_indices, ax = ax2)
     ax3_lines = plot_data(np.array([t0]), initial_state, ax3_indices, ax = ax3)
 
-    ax2.legend(ax2_lines, ["J1 K", "J2 K", "J1 FF", "J2 FF"], loc='lower center', bbox_to_anchor = (0.5, -1))
+    ax2.legend(ax2_lines, ["J1 Voltage", "J2 Voltage"], loc='lower center', bbox_to_anchor = (0.5, -1))
     #ax3.legend(ax3_lines, ["J1 Est. Err.", "J2 Est. Err."], loc='lower center', bbox_to_anchor = (0.5, -1))
-    ax3.legend(ax3_lines, ["A Condition"], loc='lower center', bbox_to_anchor = (0.5, -1))
+    ax3.legend(ax3_lines, ["J1 Input Err.", "J2 Input Err."], loc='lower center', bbox_to_anchor = (0.5, -1))
 
     def init():
         (xs, ys) = get_arm_joints(initial_state[arm.X_IDX])
@@ -608,6 +615,8 @@ def animate_arm(arm: DoubleJointedArm, tspan = None, fps = 20):
         ax.set_xlim(-total_len, total_len)
         ax.set_ylim(-total_len, total_len)
 
+        ax.add_patch(Rectangle((-60*.0254,-7*.0254), 120*.0254, 72*.0254))
+
         plot_data(time_hist, state_hist, ax2_indices, lines = ax2_lines)
         plot_data(time_hist, state_hist, ax3_indices, lines = ax3_lines)
         ax2.set_ylim(ax2_ylim)
@@ -619,7 +628,18 @@ def animate_arm(arm: DoubleJointedArm, tspan = None, fps = 20):
     nframes = len(tvec)
     anim = animation.FuncAnimation(fig, animate, init_func = init, frames = nframes, interval = int(dt*1000), blit=False, repeat=True)
     plt.show()
-    #anim.save('frccontrol_sim_distubance.gif', writer='imagemagick')
+    #anim.save('trajopt2.gif', writer='imagemagick')
+
+def write_to_json(tvec, xhat_rec, u_rec):
+    N = xhat_rec.shape[1]
+    with open("log.json", "w") as outfile:
+        log = []
+        for i in range(N):
+            d = {'q1': xhat_rec[0,i], 'q2': xhat_rec[1,i], 'q1d': xhat_rec[2,i], 'q2d': xhat_rec[3,i], 'u1': u_rec[0,i], 'u2': u_rec[1,i], 't': tvec[i]}
+            log.append(d)
+        json.dump(log, outfile)
+    
+    
 
 if __name__ == "__main__":
     main()

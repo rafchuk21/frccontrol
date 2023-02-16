@@ -1,5 +1,6 @@
 from __future__ import annotations
 import numpy as np
+import json
 
 class Trajectory(object):
 
@@ -190,3 +191,17 @@ def __cubic_interpolation(t0, tf, state0, statef):
 
     coeffs = np.linalg.inv(lhs) @ rhs
     return coeffs
+
+def from_json(file):
+    f = open(file)
+    data = json.load(f)
+    states = []
+    times = []
+
+    for d in data:
+        state = [d[k] for k in ('q1', 'q2', 'q1d', 'q2d')]
+        t = d['t']
+        states.append(state)
+        times.append(t)
+    
+    return Trajectory(np.array(times), np.array(states).T)
